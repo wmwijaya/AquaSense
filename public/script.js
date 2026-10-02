@@ -1,7 +1,9 @@
 /* ---------- Storage (single swap point; replace internals to move to IndexedDB etc.) ---------- */
 const KEY = 'aquasense:v1';
 const DEFAULTS = () => ({
-  target: 2000,
+  target: 2000, targetUpdatedAt: 0,
+  remindersUpdatedAt: 0,
+  deleted: [],     // ids of removed drinks (tombstones so deletes sync)
   drinks: [],      // {id, ts, ml, label}
   urination: {},   // 'YYYY-MM-DD' -> {count, hold, duration, reason, symptoms[]}
   uro: [],         // {ts, level}
@@ -19,7 +21,7 @@ const Store = {
   },
 };
 const data = Store.load();
-const commit = () => Store.save(data);
+const commit = () => { Store.save(data); Sync.schedule(); };
 
 /* ---------- Helpers ---------- */
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -106,6 +108,7 @@ function renderHistory() {
     row.querySelector('strong').textContent = '+' + d.ml + ' ml';
     row.querySelector('.del').addEventListener('click', () => {
       data.drinks = data.drinks.filter(x => x.id !== d.id);
+      data.deleted.push(d.id);
       commit(); render(); toast('Catatan dihapus');
     });
     box.append(row);
@@ -190,14 +193,14 @@ $('#saveDrink').addEventListener('click', () => {
 /* ---------- Reminders ---------- */
 $('#reminderToggle').addEventListener('click', () => {
   const r = data.reminders;
-  r.enabled = !r.enabled;
+  r.enabled = !r.enabled; data.remindersUpdatedAt = Date.now();
   commit(); renderReminders();
   if (r.enabled && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
   toast(r.enabled ? 'Pengingat aktif' : 'Pengingat dinonaktifkan');
 });
 $$('.slot').forEach(inp => inp.addEventListener('change', () => {
   if (!inp.value) return;
-  data.reminders.times[+inp.dataset.slot] = inp.value;
+  data.reminders.times[+inp.dataset.slot] = inp.value; data.remindersUpdatedAt = Date.now();
   commit(); toast('Jadwal diperbarui');
 }));
 function checkReminders() {
@@ -239,6 +242,7 @@ $('#saveUrination').addEventListener('click', () => {
     hold: hold.i, duration: dur.text, reason: reason.text,
     durationIdx: dur.i, reasonIdx: reason.i,
     symptoms: $$('#urination .check input:checked').map(c => c.value),
+    updatedAt: Date.now(),
   };
   commit(); render();
   const danger = data.urination[todayKey()].symptoms.includes('Urine kemerahan atau berdarah');
@@ -292,12 +296,106 @@ $('#targetMinus').addEventListener('click', () => setDraft(draftTarget - TARGET_
 $('#targetPlus').addEventListener('click', () => setDraft(draftTarget + TARGET_STEP));
 $$('#targetPresets button').forEach(b => b.addEventListener('click', () => setDraft(+b.dataset.v)));
 $('#saveTarget').addEventListener('click', () => {
-  data.target = draftTarget; commit(); render();
+  data.target = draftTarget; data.targetUpdatedAt = Date.now(); commit(); render();
   toast('Target harian disimpan ✓'); showPage('home');
 });
 $$('[data-page="settings"]').forEach(b => b.addEventListener('click', () => { draftTarget = data.target; renderTarget(); }));
 
+/* ---------- Account & sync ---------- */
+// Guest mode works fully offline. When signed in, the whole document is pushed to
+// the server, which merges it with other devices' copies and returns the result.
+const Sync = {
+  email: null, busy: false, again: false, timer: null, status: 'off',
+  api(path, body) {
+    return fetch('/api/' + path, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: 'same-origin',
+    }).then(async r => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(new Error(j.error || 'gagal'), { status: r.status });
+      return j;
+    });
+  },
+  schedule() {
+    if (!this.email) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.run(), 1500);
+  },
+  async run() {
+    if (!this.email) return;
+    if (this.busy) { this.again = true; return; }
+    this.busy = true; this.again = false;
+    this.setStatus('syncing');
+    try {
+      const { data: merged } = await this.api('sync', { data });
+      if (this.again) { this.busy = false; return this.run(); }  // edited mid-flight: resend, don't clobber
+      const reminders = merged.reminders || data.reminders;
+      reminders.fired = data.reminders.fired || {};
+      Object.assign(data, merged, { reminders });
+      Store.save(data);
+      draftTarget = data.target;
+      renderTarget(); renderReminders(); renderUrination(); render();
+      this.setStatus('ok');
+    } catch (e) {
+      if (e.status === 401) { this.email = null; this.setStatus('off'); toast('Sesi berakhir, silakan masuk lagi'); }
+      else this.setStatus('error');
+    } finally { this.busy = false; }
+  },
+  setStatus(s) {
+    this.status = s;
+    const guest = !this.email;
+    $('#authGuest').hidden = !guest;
+    $('#authUser').hidden = guest;
+    if (!guest) {
+      $('#authEmail').textContent = this.email;
+      $('#syncState').textContent = { syncing: 'Menyinkronkan…', ok: 'Tersinkron ✓', error: 'Offline — akan dicoba lagi', off: '' }[s];
+    }
+  },
+  async boot() {
+    try { this.email = (await this.api('me')).email; } catch { /* offline or no backend: stay in guest mode */ }
+    this.setStatus(this.email ? 'syncing' : 'off');
+    if (this.email) this.run();
+  },
+};
+window.addEventListener('online', () => Sync.run());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Sync.run(); });
+
+async function authSubmit(kind) {
+  const email = $('#authEmailInput').value, password = $('#authPassInput').value;
+  $('#authError').textContent = '';
+  try {
+    const r = await Sync.api(kind, { email, password });
+    Sync.email = r.email; $('#authPassInput').value = '';
+    toast(kind === 'register' ? 'Akun dibuat ✓' : 'Berhasil masuk ✓');
+    await Sync.run();
+  } catch (e) { $('#authError').textContent = e.status ? e.message : 'Tidak dapat terhubung ke server'; }
+}
+$('#loginBtn').addEventListener('click', () => authSubmit('login'));
+$('#registerBtn').addEventListener('click', () => authSubmit('register'));
+$('#syncNow').addEventListener('click', () => Sync.run());
+$('#logoutBtn').addEventListener('click', async () => {
+  await Sync.run();                         // push last changes first
+  await Sync.api('logout', {}).catch(() => {});
+  Sync.email = null;
+  // Clear this device's copy so the next person on a shared device starts clean.
+  Object.assign(data, DEFAULTS()); Store.save(data);
+  draftTarget = data.target;
+  Sync.setStatus('off'); renderTarget(); renderReminders(); renderUrination(); render();
+  toast('Keluar. Data tetap tersimpan di akunmu.');
+});
+$('#deleteAccountBtn').addEventListener('click', async () => {
+  const password = prompt('Masukkan kata sandi untuk menghapus akun dan semua datanya di server:');
+  if (!password) return;
+  try {
+    await Sync.api('delete-account', { password });
+    Sync.email = null; Sync.setStatus('off'); toast('Akun dihapus');
+  } catch (e) { toast(e.message); }
+});
+
 /* ---------- Boot ---------- */
 // Keep views correct if the tab stays open across midnight.
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { render(); renderUrination(); } });
+Sync.setStatus('off'); Sync.boot();
 updateSaveAmount(); renderTarget(); renderReminders(); renderUrination(); render(); checkReminders();

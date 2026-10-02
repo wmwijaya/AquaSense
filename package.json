@@ -1,0 +1,11 @@
+{
+  "name": "aquasense",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AquaSense hydration tracker with optional account sync",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node --test server/merge.test.js"
+  }
+}

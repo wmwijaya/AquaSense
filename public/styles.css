@@ -38,3 +38,9 @@ svg{width:20px;height:20px;flex:none;stroke-linecap:round;stroke-linejoin:round}
 .empty{padding:var(--space-5) 0;color:var(--text-tertiary);font-size:var(--text-sm)}
 .bar-chart i.today{background:var(--blue)}.bar-chart i:not(.today){opacity:.45}
 .history-item .del{border:0;background:none;color:var(--text-tertiary);font-size:18px;cursor:pointer}
+.account{margin-top:var(--space-7);padding-top:var(--space-6);border-top:1px solid var(--border)}
+.field{display:block;margin:var(--space-3) 0;font-size:var(--text-sm);color:var(--text-secondary)}
+.field input{display:block;width:100%;margin-top:var(--space-1);padding:12px;border:1px solid var(--border-strong);border-radius:var(--radius-md);font:var(--text-md) inherit;color:var(--text-primary)}
+.auth-actions{display:flex;gap:var(--space-3);align-items:center;margin:var(--space-4) 0}
+.auth-error{min-height:18px;margin:0;color:var(--danger);font-size:var(--text-sm)}
+.text-button.danger{color:var(--danger)}

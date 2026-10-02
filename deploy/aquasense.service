@@ -1,0 +1,21 @@
+[Unit]
+Description=AquaSense
+After=network.target
+
+[Service]
+User=aquasense
+WorkingDirectory=/opt/aquasense
+ExecStart=/usr/bin/node server/server.js
+Environment=PORT=3000
+Environment=HOST=127.0.0.1
+Environment=DATA_DIR=/var/lib/aquasense
+Environment=COOKIE_SECURE=1
+Restart=on-failure
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/aquasense
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
