@@ -9,7 +9,7 @@ ExecStart=/usr/bin/node server/server.js
 Environment=PORT=3000
 Environment=HOST=127.0.0.1
 Environment=DATA_DIR=/var/lib/aquasense
-Environment=COOKIE_SECURE=1
+# Cookies are marked Secure automatically when nginx forwards X-Forwarded-Proto: https.
 Restart=on-failure
 # Hardening
 NoNewPrivileges=true
